@@ -1043,7 +1043,6 @@
     }
 
     function playerPass(team, actingPlayer) {
-      // O passe funciona se o jogador estiver dominando a bola
       if (ball.carrier === actingPlayer) {
         const partner = getClosestPartner(actingPlayer, team);
         if (partner) {
@@ -1052,6 +1051,7 @@
           const len = Math.hypot(dx, dy);
           
           ball.release();
+          ball.stealCooldown = 25; // Impede redominar imediatamente ao tocar
           ball.vx = (dx / len) * 13;
           ball.vy = (dy / len) * 13;
           
@@ -1061,14 +1061,15 @@
       }
     }
 
+    // Chute
     function playerShoot(team, actingPlayer, goalTargetX, goalTargetY) {
-      // O chute funciona se o jogador estiver dominando a bola
       if (ball.carrier === actingPlayer) {
         const dx = goalTargetX - ball.x;
         const dy = goalTargetY - ball.y + (Math.random() - 0.5) * 50;
         const len = Math.hypot(dx, dy);
 
         ball.release();
+        ball.stealCooldown = 30; // Impede redominar imediatamente ao chutar
         ball.vx = (dx / len) * 19;
         ball.vy = (dy / len) * 19;
 
@@ -1082,15 +1083,12 @@
     function updateTacticalAIs(team, opponentTeam, side, targetGoalX) {
       const activeControlled = (team === playerTeam) ? activePlayer : (gameMode === 'pvp' ? activePlayer2 : null);
       
-      // Verifica quem tem a posse
       const teamHasPossession = team.some(p => ball.carrier === p);
       const opponentHasPossession = opponentTeam.some(p => ball.carrier === p);
 
       team.forEach(member => {
-        // Ignora o jogador ativamente controlado pelo player humano
         if (activeControlled && member.id === activeControlled.id) return;
 
-        // Se jogando contra o CPU (modo AI) e este for o jogador mais perto da bola da IA (e ninguém dominou), ele vai atrás dela
         if (gameMode === 'ai' && team === aiTeam && !ball.carrier) {
           const closestCPU = getClosestToBall(aiTeam);
           if (member.id === closestCPU.id) {
@@ -1145,7 +1143,11 @@
     // --- CONTROLE HUMANO (PLAYER 1 & PLAYER 2) ---
     function updateHumanControllers() {
       // --- PLAYER 1 (AZUL) ---
-      if (!ball.carrier || ball.carrier.team !== 'player') {
+      // Se uma IA do seu time pegar a bola, o controle do player é transferido imediatamente para ela
+      if (ball.carrier && ball.carrier.team === 'player') {
+        activePlayer = ball.carrier;
+      } else {
+        // Caso a bola não esteja com nosso time, controla o jogador mais próximo da bola
         activePlayer = getClosestToBall(playerTeam);
       }
 
@@ -1165,7 +1167,9 @@
 
       // --- PLAYER 2 (VERMELHO - SE PVP) ---
       if (gameMode === 'pvp') {
-        if (!ball.carrier || ball.carrier.team !== 'ai') {
+        if (ball.carrier && ball.carrier.team === 'ai') {
+          activePlayer2 = ball.carrier;
+        } else {
           activePlayer2 = getClosestToBall(aiTeam);
         }
 
