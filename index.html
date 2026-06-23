@@ -1048,16 +1048,13 @@
     }
 
     // Distância máxima para interagir com a bola sem precisar de posse formal
-    const INTERACT_RANGE = 55;
+    const INTERACT_RANGE = 60;
 
-    // Verifica se um jogador pode interagir com a bola (tem posse ou está perto)
+    // Verifica se o jogador ativo pode agir: tem a bola OU está perto dela
     function canInteract(player) {
       if (ball.carrier === player) return true;
-      // Permite ação se o jogador estiver perto o suficiente e nenhum adversário tiver a bola
       const dist = Math.hypot(player.x - ball.x, player.y - ball.y);
-      const opponents = (player.team === 'player') ? aiTeam : playerTeam;
-      const oppHasBall = opponents.some(p => ball.carrier === p);
-      return !oppHasBall && dist < INTERACT_RANGE;
+      return dist < INTERACT_RANGE;
     }
 
     // Força o jogador a dominar a bola para poder executar a ação
@@ -1080,8 +1077,8 @@
         
         ball.release();
         ball.stealCooldown = 25; 
-        ball.vx = (dx / len) * 13;
-        ball.vy = (dy / len) * 13;
+        ball.vx = (dx / len) * 14;
+        ball.vy = (dy / len) * 14;
         
         sound.playPass();
         createExplosion(ball.x, ball.y, team === playerTeam ? 'rgba(56, 189, 248, 0.6)' : 'rgba(244, 63, 94, 0.6)', 8, 0.6);
@@ -1094,14 +1091,14 @@
 
       forceCarry(activeP);
       const dx = goalTargetX - ball.x;
-      const dy = goalTargetY - ball.y + (Math.random() - 0.5) * 50;
+      const dy = goalTargetY - ball.y + (Math.random() - 0.5) * 60;
       const len = Math.hypot(dx, dy);
       if (len === 0) return;
 
       ball.release();
       ball.stealCooldown = 30; 
-      ball.vx = (dx / len) * 19;
-      ball.vy = (dy / len) * 19;
+      ball.vx = (dx / len) * 20;
+      ball.vy = (dy / len) * 20;
 
       sound.playShoot();
       createExplosion(ball.x, ball.y, team === playerTeam ? 'rgba(56, 189, 248, 0.8)' : 'rgba(244, 63, 94, 0.8)', 15, 1.2);
@@ -1145,63 +1142,114 @@
       }
     }
 
-    // --- NOVA INTELIGÊNCIA ARTIFICIAL TÁTICA (COMPANHEIROS IA) ---
+    // --- POSIÇÕES ALEATÓRIAS DE ATAQUE (atualizadas periodicamente) ---
+    // Cada jogador tem sua posição aleatória de roaming que muda a cada intervalo
+    const roamPositions = {};
+    function refreshRoamPosition(member, side) {
+      const halfWidth = PITCH.width / 2;
+      // Meia de ataque = campo do adversário
+      const attackMinX = (side === 'left') ? halfWidth + 30  : PITCH.border + 30;
+      const attackMaxX = (side === 'left') ? PITCH.width - PITCH.border - 30 : halfWidth - 30;
+      const minY = PITCH.border + 30;
+      const maxY = PITCH.height - PITCH.border - 30;
+      roamPositions[member.id + '_' + side] = {
+        x: attackMinX + Math.random() * (attackMaxX - attackMinX),
+        y: minY + Math.random() * (maxY - minY),
+        updatedAt: Date.now()
+      };
+    }
+
+    function getRoamTarget(member, side) {
+      const key = member.id + '_' + side;
+      const now = Date.now();
+      if (!roamPositions[key] || now - roamPositions[key].updatedAt > 2500 + member.id * 400) {
+        refreshRoamPosition(member, side);
+      }
+      return roamPositions[key];
+    }
+
+    // --- INTELIGÊNCIA ARTIFICIAL TÁTICA ---
+    // Companheiros do jogador humano (time azul): roam aleatório no ataque, defesa organizada
+    // Time vermelho da IA (modo 1 jogador): persegue bola e chuta ao gol
     function updateTacticalAIs(team, opponentTeam, side, targetGoalX) {
       const activeControlled = (team === playerTeam) ? activePlayer : (gameMode === 'pvp' ? activePlayer2 : null);
       
-      const teamHasPossession = team.some(p => ball.carrier === p);
+      const teamHasPossession   = team.some(p => ball.carrier === p);
       const opponentHasPossession = opponentTeam.some(p => ball.carrier === p);
+      // Bola está no nosso campo?
+      const ballInOurHalf = (side === 'left') ? (ball.x < PITCH.width / 2) : (ball.x > PITCH.width / 2);
 
       team.forEach(member => {
+        // Não mexe no jogador humano ativo
         if (activeControlled && member.id === activeControlled.id) return;
 
-        if (gameMode === 'ai' && team === aiTeam && !ball.carrier) {
-          const closestCPU = getClosestToBall(aiTeam);
-          if (member.id === closestCPU.id) {
-            member.targetX = ball.x;
-            member.targetY = ball.y;
-            return;
+        // === TIME AZUL DO JOGADOR (companheiros) ===
+        if (team === playerTeam) {
+          if (opponentHasPossession && ballInOurHalf) {
+            // DEFESA: adversário com bola no nosso campo → posição defensiva escalonada
+            const defX = (side === 'left') ? PITCH.border + 80 + member.id * 60 : PITCH.width - PITCH.border - 80 - member.id * 60;
+            const defY = Goals.left.topY + (PITCH.goalWidth / (team.length)) * (member.id);
+            member.targetX = defX;
+            member.targetY = defY + (Math.sin(Date.now() / 700 + member.id) * 25);
+          } else {
+            // ATAQUE / BOLA LIVRE: roam aleatório no campo adversário
+            const roam = getRoamTarget(member, side);
+            member.targetX = roam.x;
+            member.targetY = roam.y;
           }
+          return;
         }
 
-        // --- COMPORTAMENTOS TÁTICOS ---
-        if (opponentHasPossession) {
-          const opponentFieldHalf = (side === 'left') ? (ball.x > PITCH.width / 2) : (ball.x < PITCH.width / 2);
-          
-          if (opponentFieldHalf) {
-            const defenseX = (side === 'left') ? (PITCH.border + 120) : (PITCH.width - PITCH.border - 120);
-            member.targetX = defenseX + (Math.sin(Date.now() / 400 + member.id) * 30);
-            member.targetY = (PITCH.height / 4) * (member.id === 1 ? 1.5 : 2.5) + (Math.cos(Date.now() / 500) * 20);
+        // === TIME VERMELHO (IA adversária, modo 1 jogador) ===
+        if (gameMode === 'ai' && team === aiTeam) {
+          if (!ball.carrier) {
+            // Sem portador: o mais próximo vai à bola, outros se posicionam
+            const closestCPU = getClosestToBall(aiTeam);
+            if (member.id === closestCPU.id) {
+              member.targetX = ball.x;
+              member.targetY = ball.y;
+            } else {
+              // Suporte ofensivo
+              const attackX = (side === 'right') ? PITCH.border + 160 : PITCH.width - PITCH.border - 160;
+              member.targetX = attackX + (Math.sin(Date.now() / 500 + member.id) * 40);
+              member.targetY = (PITCH.height / 3) * (member.id === 1 ? 1 : 2) + (Math.cos(Date.now() / 600) * 30);
+            }
+          } else if (teamHasPossession) {
+            // IA tem a bola: companheiros avançam para o gol
+            const carrier = ball.carrier;
+            const attackX = (side === 'right') ? PITCH.border + 120 : PITCH.width - PITCH.border - 120;
+            member.targetX = attackX;
+            member.targetY = carrier.y + (member.id === 1 ? -70 : 70);
           } else {
+            // Adversário com a bola: pressiona e marca
             const carrier = ball.carrier;
             if (member.id === 1) {
-              member.targetX = carrier.x - (side === 'left' ? -40 : 40);
-              member.targetY = carrier.y - 30;
+              member.targetX = carrier.x + (side === 'right' ? -50 : 50);
+              member.targetY = carrier.y - 40;
             } else {
-              member.targetX = carrier.x - (side === 'left' ? -40 : 40);
-              member.targetY = carrier.y + 30;
+              member.targetX = carrier.x + (side === 'right' ? -50 : 50);
+              member.targetY = carrier.y + 40;
             }
           }
-        } else if (teamHasPossession) {
-          const carrier = ball.carrier;
-          const isCarrierInDefense = (side === 'left') ? (carrier.x < PITCH.width / 2 - 80) : (carrier.x > PITCH.width / 2 + 80);
+          return;
+        }
 
-          if (isCarrierInDefense) {
-            if (member.id === 1) {
-              member.targetX = carrier.x + (side === 'left' ? 90 : -90);
-              member.targetY = carrier.y - 50;
-            } else {
-              member.targetX = carrier.x + (side === 'left' ? 90 : -90);
-              member.targetY = carrier.y + 50;
-            }
+        // === MODO PVP: companheiros do player2 também fazem roam aleatório ===
+        if (gameMode === 'pvp' && team === aiTeam) {
+          if (teamHasPossession && !ballInOurHalf) {
+            const roam = getRoamTarget(member, side);
+            member.targetX = roam.x;
+            member.targetY = roam.y;
+          } else if (opponentHasPossession && ballInOurHalf) {
+            const defX = (side === 'right') ? PITCH.width - PITCH.border - 80 - member.id * 60 : PITCH.border + 80 + member.id * 60;
+            const defY = Goals.right.topY + (PITCH.goalWidth / (team.length)) * member.id;
+            member.targetX = defX;
+            member.targetY = defY + (Math.sin(Date.now() / 700 + member.id + 5) * 25);
           } else {
-            const attackX = (side === 'left') ? (PITCH.width - PITCH.border - 180) : (PITCH.border + 180);
-            member.targetX = attackX;
-            member.targetY = (PITCH.height / 4) * (member.id === 1 ? 1.5 : 2.5);
+            const roam = getRoamTarget(member, side);
+            member.targetX = roam.x;
+            member.targetY = roam.y;
           }
-        } else {
-          member.targetX = ball.x + (side === 'left' ? -60 : 60) + (Math.sin(Date.now() / 600 + member.id) * 25);
-          member.targetY = ball.y + (member.id === 1 ? -60 : 60);
         }
       });
     }
