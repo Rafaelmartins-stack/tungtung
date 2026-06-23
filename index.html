@@ -693,6 +693,12 @@
 
     // --- CONTROLE DE TECLADO ---
     const keys = {};
+    // Flags de ação: setadas pelo keydown e consumidas no próximo frame do jogo
+    let pressedPass1  = false;
+    let pressedShoot1 = false;
+    let pressedPass2  = false;
+    let pressedShoot2 = false;
+
     window.addEventListener('keydown', (e) => {
       const code = e.code;
       const key = e.key.toLowerCase();
@@ -704,24 +710,16 @@
         e.preventDefault();
       }
       
-      if (!gameRunning) return;
+      if (!gameRunning || isGoalSequence) return;
 
       // --- CONTROLES PLAYER 1 (AZUL) ---
-      if (key === 'z') {
-        actionPass(playerTeam, activePlayer);
-      }
-      if (key === 'x') {
-        actionShoot(playerTeam, activePlayer, Goals.right.x, PITCH.height / 2);
-      }
+      if (key === 'z') pressedPass1  = true;
+      if (key === 'x') pressedShoot1 = true;
 
       // --- CONTROLES PLAYER 2 (VERMELHO - PVP) ---
       if (gameMode === 'pvp') {
-        if (key === '1' || code === 'Numpad1') {
-          actionPass(aiTeam, activePlayer2);
-        }
-        if (key === '0' || code === 'Numpad0') {
-          actionShoot(aiTeam, activePlayer2, Goals.left.x, PITCH.height / 2);
-        }
+        if (key === '1' || code === 'Numpad1') pressedPass2  = true;
+        if (key === '0' || code === 'Numpad0') pressedShoot2 = true;
       }
     });
 
@@ -1301,16 +1299,18 @@
       }
     }
 
-    // --- NOVA MECÂNICA DE DOMÍNIO E ROUBO DE BOLA ---
+    // --- MECÂNICA DE DOMÍNIO E ROUBO DE BOLA ---
     function checkBallPossession() {
       const allPlayers = [...playerTeam, ...aiTeam];
 
       if (!ball.carrier) {
+        // Só permite pegar a bola quando o cooldown acabar
+        if (ball.stealCooldown > 0) return;
         for (let player of allPlayers) {
           const dist = Math.hypot(player.x - ball.x, player.y - ball.y);
-          if (dist < player.radius + ball.radius + 8) {
+          if (dist < player.radius + ball.radius + 6) {
             ball.carrier = player;
-            ball.stealCooldown = 30; 
+            ball.stealCooldown = 20;
             break;
           }
         }
@@ -1321,9 +1321,9 @@
         if (ball.stealCooldown === 0) {
           for (let opp of opponents) {
             const dist = Math.hypot(opp.x - currentCarrier.x, opp.y - currentCarrier.y);
-            if (dist < opp.radius + currentCarrier.radius + 5) {
+            if (dist < opp.radius + currentCarrier.radius + 4) {
               ball.carrier = opp;
-              ball.stealCooldown = 35; 
+              ball.stealCooldown = 35;
               createExplosion(ball.x, ball.y, opp.team === 'player' ? 'rgba(56, 189, 248, 0.7)' : 'rgba(244, 63, 94, 0.7)', 6, 0.5);
               
               if (gameMode === 'ai' && opp.team === 'ai') {
@@ -1504,6 +1504,17 @@
 
       if (!isGoalSequence) {
         updateHumanControllers();
+
+        // --- PROCESSA A\u00c7\u00d5ES DE PASSE E CHUTE (consumidas ap\u00f3s activePlayer ser atualizado) ---
+        if (pressedPass1)  { actionPass(playerTeam, activePlayer); pressedPass1 = false; }
+        if (pressedShoot1) { actionShoot(playerTeam, activePlayer, Goals.right.x, PITCH.height / 2); pressedShoot1 = false; }
+        if (gameMode === 'pvp') {
+          if (pressedPass2)  { actionPass(aiTeam, activePlayer2); pressedPass2 = false; }
+          if (pressedShoot2) { actionShoot(aiTeam, activePlayer2, Goals.left.x, PITCH.height / 2); pressedShoot2 = false; }
+        } else {
+          pressedPass2 = pressedShoot2 = false;
+        }
+
         checkBallPossession();
         
         updateTacticalAIs(playerTeam, aiTeam, 'left', Goals.right.x);
