@@ -899,7 +899,9 @@
         this.radius = 16;
         this.speed = (team === 'ai' && gameMode === 'ai') ? 2.1 : 3.8; 
         this.jerseyNumber = id;
-        this.angle = 0; // Direção olhando/movendo
+        this.angle = 0;
+        // Timer de decisão da IA adversária (frames até agir)
+        this.aiDecisionTimer = 0;
       }
 
       update() {
@@ -1311,6 +1313,10 @@
           if (dist < player.radius + ball.radius + 6) {
             ball.carrier = player;
             ball.stealCooldown = 20;
+            // Quando a IA adversária pega a bola, agenda uma decisão
+            if (gameMode === 'ai' && player.team === 'ai') {
+              player.aiDecisionTimer = 20 + Math.floor(Math.random() * 30);
+            }
             break;
           }
         }
@@ -1325,19 +1331,78 @@
               ball.carrier = opp;
               ball.stealCooldown = 35;
               createExplosion(ball.x, ball.y, opp.team === 'player' ? 'rgba(56, 189, 248, 0.7)' : 'rgba(244, 63, 94, 0.7)', 6, 0.5);
-              
+              // Agenda decisão da IA ao roubar
               if (gameMode === 'ai' && opp.team === 'ai') {
-                setTimeout(() => {
-                  if (ball.carrier === opp) {
-                    playerShoot(aiTeam, Goals.left.x, PITCH.height / 2);
-                  }
-                }, 150 + Math.random() * 300);
+                opp.aiDecisionTimer = 18 + Math.floor(Math.random() * 25);
               }
               break;
             }
           }
         }
       }
+    }
+
+    // --- MOTOR DE DECISÃO DA IA ADVERSÁRIA ---
+    // Roda a cada frame, processa o timer de cada jogador vermelho com a bola
+    function updateAIDecisions() {
+      if (gameMode !== 'ai') return;
+
+      aiTeam.forEach(aiPlayer => {
+        if (ball.carrier !== aiPlayer) return; // só age quem tem a bola
+
+        // Decrementa timer
+        if (aiPlayer.aiDecisionTimer > 0) {
+          aiPlayer.aiDecisionTimer--;
+          return; // ainda pensando
+        }
+
+        // --- HORA DE AGIR ---
+        const distToGoal = Math.hypot(aiPlayer.x - Goals.left.x, aiPlayer.y - PITCH.height / 2);
+
+        // Verifica se tem companheiro bem posicionado para passe
+        const teammates = aiTeam.filter(p => p.id !== aiPlayer.id);
+        let bestPassTarget = null;
+        let bestPassScore  = -1;
+
+        teammates.forEach(tm => {
+          // Score do passe: quanto mais perto do gol e mais livre, melhor
+          const tmDistToGoal = Math.hypot(tm.x - Goals.left.x, tm.y - PITCH.height / 2);
+          // Verifica se há defensor perto do companheiro
+          const nearestOpp = playerTeam.reduce((best, opp) => {
+            const d = Math.hypot(opp.x - tm.x, opp.y - tm.y);
+            return d < best ? d : best;
+          }, Infinity);
+          const score = (1 / Math.max(tmDistToGoal, 1)) * (nearestOpp > 80 ? 2 : 1);
+          if (score > bestPassScore) {
+            bestPassScore  = score;
+            bestPassTarget = tm;
+          }
+        });
+
+        // Decisão: chuta se estiver a menos de 320px do gol OU se não há passe melhor
+        const shouldShoot = distToGoal < 320 || !bestPassTarget || bestPassScore < 0.003;
+
+        if (shouldShoot) {
+          // CHUTE AO GOL (com leve variação para simular erro)
+          const targetY = PITCH.height / 2 + (Math.random() - 0.5) * (PITCH.goalWidth * 0.8);
+          playerShoot(aiTeam, Goals.left.x, targetY);
+        } else {
+          // PASSE para o companheiro melhor posicionado
+          const dx = bestPassTarget.x - ball.x;
+          const dy = bestPassTarget.y - ball.y;
+          const len = Math.hypot(dx, dy);
+          if (len > 0) {
+            ball.release();
+            ball.stealCooldown = 28;
+            ball.vx = (dx / len) * 13;
+            ball.vy = (dy / len) * 13;
+            sound.playPass();
+            createExplosion(ball.x, ball.y, 'rgba(244, 63, 94, 0.6)', 8, 0.6);
+            // O receptor agenda uma nova decisão quando pegar a bola
+            bestPassTarget.aiDecisionTimer = 22 + Math.floor(Math.random() * 20);
+          }
+        }
+      });
     }
 
     // --- COLISÕES ENTRE COMPANHEIROS ---
@@ -1505,7 +1570,7 @@
       if (!isGoalSequence) {
         updateHumanControllers();
 
-        // --- PROCESSA A\u00c7\u00d5ES DE PASSE E CHUTE (consumidas ap\u00f3s activePlayer ser atualizado) ---
+        // --- PROCESSA AÇÕES DE PASSE E CHUTE (consumidas após activePlayer ser atualizado) ---
         if (pressedPass1)  { actionPass(playerTeam, activePlayer); pressedPass1 = false; }
         if (pressedShoot1) { actionShoot(playerTeam, activePlayer, Goals.right.x, PITCH.height / 2); pressedShoot1 = false; }
         if (gameMode === 'pvp') {
@@ -1516,6 +1581,7 @@
         }
 
         checkBallPossession();
+        updateAIDecisions();   // IA adversária decide: passar ou chutar
         
         updateTacticalAIs(playerTeam, aiTeam, 'left', Goals.right.x);
         updateTacticalAIs(aiTeam, playerTeam, 'right', Goals.left.x);
