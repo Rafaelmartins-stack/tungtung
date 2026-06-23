@@ -698,24 +698,29 @@
       const key = e.key.toLowerCase();
       keys[code] = true;
       keys[key] = true;
+
+      // Impede scroll da página com setas e espaço
+      if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) {
+        e.preventDefault();
+      }
       
       if (!gameRunning) return;
 
       // --- CONTROLES PLAYER 1 (AZUL) ---
       if (key === 'z') {
-        playerPass(playerTeam, activePlayer);
+        actionPass(playerTeam, activePlayer);
       }
       if (key === 'x') {
-        playerShoot(playerTeam, activePlayer, Goals.right.x, PITCH.height / 2);
+        actionShoot(playerTeam, activePlayer, Goals.right.x, PITCH.height / 2);
       }
 
       // --- CONTROLES PLAYER 2 (VERMELHO - PVP) ---
       if (gameMode === 'pvp') {
         if (key === '1' || code === 'Numpad1') {
-          playerPass(aiTeam, activePlayer2);
+          actionPass(aiTeam, activePlayer2);
         }
         if (key === '0' || code === 'Numpad0') {
-          playerShoot(aiTeam, activePlayer2, Goals.left.x, PITCH.height / 2);
+          actionShoot(aiTeam, activePlayer2, Goals.left.x, PITCH.height / 2);
         }
       }
     });
@@ -1042,37 +1047,98 @@
       return closest;
     }
 
-    function playerPass(team, actingPlayer) {
-      if (ball.carrier === actingPlayer) {
-        const partner = getClosestPartner(actingPlayer, team);
+    // Distância máxima para interagir com a bola sem precisar de posse formal
+    const INTERACT_RANGE = 55;
+
+    // Verifica se um jogador pode interagir com a bola (tem posse ou está perto)
+    function canInteract(player) {
+      if (ball.carrier === player) return true;
+      // Permite ação se o jogador estiver perto o suficiente e nenhum adversário tiver a bola
+      const dist = Math.hypot(player.x - ball.x, player.y - ball.y);
+      const opponents = (player.team === 'player') ? aiTeam : playerTeam;
+      const oppHasBall = opponents.some(p => ball.carrier === p);
+      return !oppHasBall && dist < INTERACT_RANGE;
+    }
+
+    // Força o jogador a dominar a bola para poder executar a ação
+    function forceCarry(player) {
+      ball.carrier = player;
+      ball.stealCooldown = 20;
+    }
+
+    function actionPass(team, activeP) {
+      if (!activeP) return;
+      if (!canInteract(activeP)) return;
+
+      forceCarry(activeP);
+      const partner = getClosestPartner(activeP, team);
+      if (partner) {
+        const dx = partner.x - ball.x;
+        const dy = partner.y - ball.y;
+        const len = Math.hypot(dx, dy);
+        if (len === 0) return;
+        
+        ball.release();
+        ball.stealCooldown = 25; 
+        ball.vx = (dx / len) * 13;
+        ball.vy = (dy / len) * 13;
+        
+        sound.playPass();
+        createExplosion(ball.x, ball.y, team === playerTeam ? 'rgba(56, 189, 248, 0.6)' : 'rgba(244, 63, 94, 0.6)', 8, 0.6);
+      }
+    }
+
+    function actionShoot(team, activeP, goalTargetX, goalTargetY) {
+      if (!activeP) return;
+      if (!canInteract(activeP)) return;
+
+      forceCarry(activeP);
+      const dx = goalTargetX - ball.x;
+      const dy = goalTargetY - ball.y + (Math.random() - 0.5) * 50;
+      const len = Math.hypot(dx, dy);
+      if (len === 0) return;
+
+      ball.release();
+      ball.stealCooldown = 30; 
+      ball.vx = (dx / len) * 19;
+      ball.vy = (dy / len) * 19;
+
+      sound.playShoot();
+      createExplosion(ball.x, ball.y, team === playerTeam ? 'rgba(56, 189, 248, 0.8)' : 'rgba(244, 63, 94, 0.8)', 15, 1.2);
+      triggerScreenShake();
+    }
+
+    // Mantém funções legadas para compatibilidade interna (IA usa estas)
+    function playerPass(team) {
+      const carrier = ball.carrier;
+      if (carrier && team.includes(carrier)) {
+        const partner = getClosestPartner(carrier, team);
         if (partner) {
           const dx = partner.x - ball.x;
           const dy = partner.y - ball.y;
           const len = Math.hypot(dx, dy);
-          
+          if (len === 0) return;
           ball.release();
-          ball.stealCooldown = 25; // Impede redominar imediatamente ao tocar
+          ball.stealCooldown = 25;
           ball.vx = (dx / len) * 13;
           ball.vy = (dy / len) * 13;
-          
           sound.playPass();
           createExplosion(ball.x, ball.y, team === playerTeam ? 'rgba(56, 189, 248, 0.6)' : 'rgba(244, 63, 94, 0.6)', 8, 0.6);
         }
       }
     }
 
-    // Chute
-    function playerShoot(team, actingPlayer, goalTargetX, goalTargetY) {
-      if (ball.carrier === actingPlayer) {
+    function playerShoot(team, goalTargetX, goalTargetY) {
+      const carrier = ball.carrier;
+      if (carrier && team.includes(carrier)) {
         const dx = goalTargetX - ball.x;
         const dy = goalTargetY - ball.y + (Math.random() - 0.5) * 50;
         const len = Math.hypot(dx, dy);
-
+        if (len === 0) return;
         ball.release();
-        ball.stealCooldown = 30; // Impede redominar imediatamente ao chutar
+        ball.stealCooldown = 30;
         ball.vx = (dx / len) * 19;
         ball.vy = (dy / len) * 19;
-
         sound.playShoot();
         createExplosion(ball.x, ball.y, team === playerTeam ? 'rgba(56, 189, 248, 0.8)' : 'rgba(244, 63, 94, 0.8)', 15, 1.2);
         triggerScreenShake();
@@ -1143,11 +1209,9 @@
     // --- CONTROLE HUMANO (PLAYER 1 & PLAYER 2) ---
     function updateHumanControllers() {
       // --- PLAYER 1 (AZUL) ---
-      // Se uma IA do seu time pegar a bola, o controle do player é transferido imediatamente para ela
       if (ball.carrier && ball.carrier.team === 'player') {
         activePlayer = ball.carrier;
       } else {
-        // Caso a bola não esteja com nosso time, controla o jogador mais próximo da bola
         activePlayer = getClosestToBall(playerTeam);
       }
 
@@ -1217,7 +1281,7 @@
               if (gameMode === 'ai' && opp.team === 'ai') {
                 setTimeout(() => {
                   if (ball.carrier === opp) {
-                    playerShoot(aiTeam, opp, Goals.left.x, PITCH.height / 2);
+                    playerShoot(aiTeam, Goals.left.x, PITCH.height / 2);
                   }
                 }, 150 + Math.random() * 300);
               }
